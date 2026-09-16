@@ -1,5 +1,7 @@
 # RESEARCH.md — How the Grok Bot Works, and What the Market Looks Like
 
+> **Product note (2026-09-15):** Canonical product is `PRODUCT_DESIGN.md` v2 (hosted sandbox + multi-LLM gateway, Grok Bot competitor). This file is the research pass that informed v1 (BYO-key social bot) and still holds for @grok’s loop, X policy, Cursor BYOK, and legal walls on consumer-subscription OAuth.
+
 > Deep research synthesis, 2026-09-15. Compiled from seven parallel research agents (primary-source fetches, live CORS probes, repo forensics on `xai-org/grok-prompts`, Wayback archaeology on Cursor, and competitor teardowns). Confidence tags: [HIGH] = primary source fetched/verified, [MED] = credible secondary or partially verified, [LOW]/[UNVERIFIED] = flagged, do not build on without re-checking.
 
 ---

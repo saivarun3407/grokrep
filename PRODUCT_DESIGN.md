@@ -1,157 +1,387 @@
-# PRODUCT_DESIGN.md — GrokRep (working name)
+# PRODUCT_DESIGN — GrokRep (working name)
 
-> **One-liner:** Your own @grok — a summonable, persona-driven AI reply bot for your social accounts, powered by your own AI account: an API key from OpenAI, Claude, Grok, or DeepSeek, or one-click connect via OpenRouter.
->
-> ⚠️ **Wording rule (legal):** never say "use your ChatGPT/Claude subscription." Consumer chat subscriptions cannot legally power third-party bots — Anthropic's terms prohibit third-party claude.ai login and ban automated access except via API key, and they enforce it (see WHY_NOBODY_HAS_DONE_IT.md §1). The product is BYO **API key**, with OpenRouter OAuth as the no-friction path for non-developers.
->
-> Positioning reference: what Cursor did in its early days for coding (bring your own key, we supply the orchestration), applied to grok-style social bots. All claims grounded in `RESEARCH.md` (2026-09-15).
+**Status:** v2 product spec (2026-09-15). Canonical.  
+**Competitor:** Cursor **Grok Bot** (hosted cloud computer + Grok, no model picker).  
+**Rename before public launch.** “GrokRep” / “your own @grok” is trademark risk.
 
 ---
 
-## 1. Thesis
+## 0. One-liner
 
-Three verified facts make this product possible and timely:
-
-1. **The @grok architecture is reproducible with any model.** It's a static persona prompt plus an agentic tool loop (fetch thread → parallel search → browse-to-verify → view media → short reply). Every frontier model supports tool calling. xAI's real moat is privileged X ingestion — which doesn't exist on any other platform, so on Bluesky/Telegram/Discord the *loop itself* is the product.
-2. **Nobody sells this.** The reply-bot market is 100% bundled-credit, zero model choice. The only BYO-model option (ElizaOS) is a developer framework. Self-serve × BYO-model × social bot is an empty quadrant.
-3. **BYOK is honest for us in a way it never was for Cursor.** We own no models. Our moat is orchestration, connectors, and trust. Cursor's BYOK fractured the day they shipped custom models; ours never has to.
-
-**What we are NOT building:** an unsolicited engagement-farming reply-guy tool. X outlawed that shape (summoned-only replies since Feb 2026, AI replies need X approval), and the FTC treats fake-engagement tooling as penalty territory. The compliant, durable shape is the @grok shape: **a bot people deliberately summon.**
-
-## 2. Who it's for
-
-- **Creators/brands** who want an interactive presence: followers mention `@mybot` (or DM it on Telegram, or slash-command it on Discord) and get in-character, context-aware answers.
-- **Communities** wanting a resident expert bot grounded in live retrieval, not a stale FAQ.
-- **Hypefury's ~120k orphaned X accounts** — motivated, currently unserved, shopping for a migration path today.
-- **Tinkerers** priced out of credit caps who already pay for a model subscription and want "unlimited, at cost."
-
-Non-technical first. Plain-English UI copy throughout (no "inference," "system prompt," or "webhook" in user-facing text — "your bot's personality," "how it answers," "connect your account").
-
-## 3. Product shape
-
-Creating a bot is a 4-step flow, AI-assisted by default, with live streaming progress at every step:
-
-1. **Personality** — name, voice, what it's for. A guided persona builder (sectioned like the leaked Ani template: likes/dislikes, key phrases, tone, hard limits) with a chat preview pane. AI drafts the persona from a paragraph of description; user edits.
-2. **Brain** — pick a provider and paste a key (or click "Connect OpenRouter" for the one-click OAuth path). Model dropdown auto-populated from the provider. Live "test reply" button.
-3. **Platforms** — connect Bluesky / Telegram / Discord (X later, see §6). Each connector explains in one sentence what the bot can and can't do there and what it costs (X only).
-4. **Rules** — reply length, languages, topics to avoid, autonomy level (auto-post vs. approval queue — default per platform, see §6), disclosure label (on, non-removable).
-
-Then: a dashboard showing every summon, the retrieval steps the bot took (streamed live — "reading the thread… searching… verifying source…"), the reply, and cost meters (model tokens + platform API where applicable). Styling: white + green/blue, consistent with our home-page palette.
-
-## 4. Architecture
+**Grok Bot, but you pick the model.**  
+We provision a **sandbox VM** and a **multi-LLM model gateway**. You chat, create unlimited bot *configs*, put them in groups, and run a small company. You pay us. We pay the VM vendor and the labs.
 
 ```
-                    ┌─────────────────────────────────────────┐
-                    │              CONTROL PLANE              │
-                    │  persona studio · key vault · billing   │
-                    │  dashboard · approval queue · audit log │
-                    └───────────────┬─────────────────────────┘
-                                    │
-┌───────────────┐   summon   ┌──────▼──────┐   tools   ┌──────────────────┐
-│  PLATFORM     │──events───▶│ BOT RUNTIME │◀─────────▶│  TOOL LAYER      │
-│  CONNECTORS   │◀──replies──│ (agent loop)│           │ thread_fetch     │
-│ bluesky (jetstream)        └──────┬──────┘           │ platform_search  │
-│ telegram (webhook)                │                  │ web_search       │
-│ discord (gateway)          ┌──────▼──────┐           │ browse_verify    │
-│ x (mentions, summoned-only)│ MODERATION  │           │ view_image       │
-└───────────────┘            │ LAYER (owned│           └──────────────────┘
-                             │ named stage)│
-                             └──────┬──────┘           ┌──────────────────┐
-                                    │                  │ PROVIDER ADAPTERS│
-                                    └─── final post ◀──│ anthropic (native│
-                                                       │  + prompt cache) │
-                                                       │ openai · xai     │
-                                                       │ deepseek · gemini│
-                                                       │ openrouter · any │
-                                                       │ OpenAI-compat URL│
-                                                       └──────────────────┘
+User  --$-->  US  --$-->  sandbox (Firecracker / E2B / Fly)
+                 └──$-->  models (OpenRouter and/or Anthropic, OpenAI, Google, xAI)
 ```
 
-### 4.1 The agent loop (mirrors @grok, verified against its prompt)
-Per summon: static persona prompt (never per-turn templated context) → model runs tools: `thread_fetch` (parent + quoted posts), `platform_search`, `web_search` (parallel, diverse viewpoints), `browse_verify` (mandatory before asserting a searched fact), `view_image` → drafts reply under a per-platform char budget → moderation layer → post (or approval queue).
+This is a **reseller + sandbox** company (Cursor-legal: our API keys, our machines). It is **not** “log into the user’s Claude Pro.” BYO key is an optional valve when they blow the included pool — not signup.
 
-Rules inherited from @grok's prompt because they're battle-tested: no markdown in replies; match the language/dialect of the summoning post; never tag the summoner explicitly; **never condition on the bot's own prior posts** (the one rule that survived every xAI incident); reply at the invocation point.
+---
 
-### 4.2 Moderation layer — owned, named, tested (the central Grok lesson)
-All three 2025 @grok incidents trace to unreviewed prompt/config changes and a silently deleted moderation stage. So:
-- Moderation is a **separate pipeline stage** with its own tests, not a prompt paragraph. Checks: hate/harassment classifier, platform-policy rules (per-connector), user's own topic blocklist, URL policy (see §7), disclosure marker present.
-- Persona/prompt changes are **versioned with diffs** shown to the user; our own default-prompt changes go through review + changelog.
-- Kill switch per bot; global pause per platform.
+## 1. Problem
 
-### 4.3 Prompt-injection defense (the unclosable surface, managed)
-Everything the bot retrieves is attacker-writable ($150k was drained from a wallet-connected bot via Morse code in a reply). Mitigations: retrieved content is data, never instructions (structured tool results, injection-pattern stripping); **no side-effectful tools** in v1 (the bot can read and post one reply — it cannot follow, DM, transact, or browse arbitrary user-supplied URLs beyond the verify step's allowlisted fetch); moderation layer runs on output regardless of what the input claimed.
+Grok Bot already sold the package people want: **a cloud employee that stays on when the laptop closes.** Two gaps:
 
-### 4.4 Provider adapter layer
-- **Native adapters per provider** (Vercel AI SDK pattern), not a lowest-common-denominator OpenAI shim — because Anthropic's prompt caching (the single biggest LLM cost lever for a static-prompt bot) is lost through its compat shim. Cache the persona + tool definitions; only the summon context is fresh tokens.
-- Escape hatch: any OpenAI-compatible base URL (covers DeepSeek, Groq, Mistral, local, and whatever ships next).
-- OpenRouter as the **zero-friction default**: its OAuth PKCE flow is the only provider-sanctioned way to mint a user's own key in-browser — "Connect" button, no key pasting, no key ever typed into our UI.
-- Model IDs fetched live from providers, never hardcoded (model names rot — verified twice in this research).
+1. **Brain is assigned.** Grok Bot has no model picker. Cursor IDE does; Grok Bot does not. Support bot on Claude, research bot on Grok, ops bot on GPT — impossible in one Grok Bot workspace.
+2. **You live in Cursor’s account and Grok’s stack.** Switching the company off Grok means leaving the product.
 
-### 4.5 Key custody — the trust product
-A 24/7 bot must hold keys server-side (summons arrive while the user sleeps). Competitors' claims here don't survive code review (Open WebUI stores "browser-only" keys in plaintext DB; LibreChat encrypts with a fixed global IV). We do it right and **publish the design**:
-- Envelope encryption: per-user data key (AES-256-GCM, authenticated — no fixed IVs) wrapped by a KMS master key. Keys decrypt only in the runtime worker, held in memory per-request.
-- User-chosen TTL (LibreChat's best idea: 30 days / 90 days / until revoked) + one-click revoke-all; keys never in logs; last-4 display only.
-- Self-host tier reads keys from env/OS keyring and our servers never see them (big-AGI's transient pattern).
-- Plain-English key page: "Your key is stored encrypted, used only to run your bot, never to bill you, and you can delete it any time. Your conversations go to your AI provider under *their* privacy policy, not ours." (Say the privacy inversion out loud — Cursor lesson #6.)
+We sell the same “it just runs” feeling with a **per-bot provider + model** field.
 
-## 5. Compliance by design (non-negotiable defaults)
-- **Disclosure everywhere, non-removable:** bot label in profile/bio on every platform (mandatory on X, voluntary-but-default elsewhere), "AI-generated" machine-readable marker on output (EU AI Act Art. 50, in force since Aug 2026), first-interaction disclosure. CA SB 1001 safe harbor comes free with this.
-- **Never market engagement inflation.** No auto-likes, auto-follows, mass-DM — the endpoints barely exist anymore and the FTC penalty exposure is direct.
-- **Telegram:** consent-gated ("this bot uses AI; your messages are sent to [provider] to generate answers") shown on `/start`; no group-content harvesting, ever (ToS ban on AI-dataset collection).
-- **Discord:** registered bot application only; never a self-bot path.
+---
 
-## 6. Platform strategy (order dictated by policy, not preference)
+## 2. What we ship (the product)
 
-| Phase | Platform | Connection | Autonomy default | Why |
+Four nouns. If it isn’t one of these, it isn’t v1.
+
+| Noun | What the user sees |
+|---|---|
+| **Workspace** | One company / personal account. Billing lives here. |
+| **Sandbox** | One isolated Linux VM per workspace. Files, terminal, browser, bot processes. Sleeps idle, wakes on chat/summon. |
+| **Chat** | Threads against a chosen model, with tools that run **in the sandbox**. |
+| **Bots** | Named agents: persona + model + tools + channels. Unlimited *configs*. **Running** bots are capped by plan (they share the VM + token pool). |
+| **Groups** | Rooms: humans + bots. Company ops = several bots in one group, each with its own model. |
+
+**Models** are not a fourth app — they are a field on chat and on each bot, backed by **our** gateway.
+
+---
+
+## 3. Who it’s for
+
+**ICP #1 — Grok Bot switcher**  
+Wants a hosted always-on agent. Will not install Claude Code. Will not leave a Mac mini on. Wants Claude for writing, Grok for search-y tasks, GPT for structured ops.
+
+**ICP #2 — small team / “run the company”**  
+Support bot on Telegram, research bot in a group, founder in the same room. 2–20 people. Pays per seat + shared pool.
+
+**Not ICP #1:** “I already pay Claude Max; don’t bill me tokens.” That’s the BYO toggle after they’re hooked, not the homepage.
+
+---
+
+## 4. Principles
+
+1. **Signup has no CLI and no API key.** Sandbox exists and a cheap model answers in <10 minutes. Laptop can close.
+2. **Two meters, always visible:** sandbox (CPU/hours) and models (tokens). Never “$20 unlimited VM + unlimited Opus.”
+3. **New bots default to a cheap model.** Picker is the headline; flagship is an opt-in click.
+4. **Unlimited = configs, not warm processes.** Pro: e.g. 3 running bots, rest cold-start.
+5. **Our keys on the default path.** User keys optional, same VM, their bill.
+6. **Summoned, labeled, no engagement farming.** Bots reply when asked. Disclosure on. No auto-follow/mass-DM.
+7. **Sandbox is the computer, gateway is the brain.** Don’t put model credentials in the VM image.
+
+---
+
+## 5. User journeys
+
+### 5.1 First 10 minutes (success test)
+
+1. Sign up (email / Google). No card on Free; card on Pro.
+2. Control plane creates a **sleeping** sandbox. First chat **wakes** it (target: <20s cold).
+3. Chat opens with default cheap model. User sends “hello.” Reply streams.
+4. User opens picker, switches to a mid-tier model, sends again. Badge shows provider + remaining pool.
+5. **New bot:** name, one-line job, model, Telegram. We show BotFather steps or a deep link. `/start` on Telegram → bot replies from the sandbox.
+6. User closes the laptop. Telegram still answers until the pool or VM-hour cap hits.
+
+If step 5 requires `claude auth login`, we have failed the Grok Bot fight.
+
+### 5.2 Create a company group
+
+1. New **Group**: “Ops.”
+2. Add humans (invite). Add bots: `Support` (Claude Haiku), `Research` (Grok), `Scribe` (GPT mini).
+3. Human @mentions a bot in the group, or the group has a routing rule (keyword → bot).
+4. All tool use (files, browser) happens in the **shared workspace sandbox** with per-bot filesystem prefixes or a shared `/workspace`.
+
+### 5.3 Hit the cap
+
+At **80%** of the token pool: banner. Choices: upgrade, buy extra usage, **paste own key** (Anthropic/OpenAI/Google/OpenRouter). Same sandbox. At **100%**: Platform models stop; BYO and already-running cheap fallback keep going if configured. Never silent 500s.
+
+---
+
+## 6. Feature spec
+
+### 6.1 Chat
+
+- Threads, streaming, retry, stop, edit-and-resend.
+- Model picker: provider grouping, cost hint (low / mid / flagship), remaining pool.
+- Tools (run in sandbox): read/write files under `/workspace`, terminal (allowlisted), web_search, browse_verify, view_image. v1: no arbitrary outbound except allowlisted fetch + connectors.
+- Citations / tool-call trace in a side rail (“searching… verifying…”).
+- History stored in control plane, not only on the VM (VM is ephemeral).
+
+### 6.2 Bots
+
+**Config (unlimited):**
+
+| Field | Notes |
+|---|---|
+| Name, avatar, one-liner | |
+| Persona | Versioned. Diffs shown. likes / dislikes / tone / hard limits. |
+| Model | Provider + model id from live catalog. |
+| Tools | Subset of sandbox tools. |
+| Channels | In-app, Telegram, later Discord/Bluesky. |
+| Autonomy | Auto-reply vs approval queue. |
+| Disclosure | On, non-removable. |
+| Blocklist | Topics, users, URL policy. |
+
+**Runtime:**
+
+- **Running** = process (or lightweight worker) in the sandbox listening on channels.
+- **Stopped** = config only.
+- **Paused** = kill switch (workspace admin or us).
+- Logs: every summon, model used, tokens, sandbox CPU, output after moderation.
+
+**Agent loop** (portable @grok contract, clean-room — do not copy xAI prompt text):
+
+persona (static) → tools (thread/context, search, browse-verify, media) → draft under channel budget → **moderation stage** → post or queue.
+
+Rules we keep: retrieved text is **data**, not instructions; match language of the summon; no markdown on social channels; never tag the summoner; never condition on the bot’s own prior posts.
+
+### 6.3 Groups
+
+- A group is a thread with **members** (users + bots).
+- Each bot keeps its own model.
+- Optional router bot (cheap model) that assigns the mention to a specialist.
+- Company view: list of groups, which bots are running, pool burn per bot.
+
+### 6.4 Sandbox (user-visible)
+
+Status light: **Sleeping / Waking / Ready / Capped**.  
+Disk: `/workspace` persisted across sleeps (object storage snapshot).  
+Terminal: optional for Pro+, not on Free.  
+“This is your cloud computer. Bots live here. It sleeps to save your hours.”
+
+### 6.5 Models (user-visible)
+
+Picker on chat and on each bot.
+
+**Platform (default):** our gateway, counts against included pool.  
+**BYO (optional):** user key, same sandbox, does not count against our pool; still counts VM hours.
+
+Never: “Sign in with Claude.ai / ChatGPT / Gemini” in our hosted app.
+
+### 6.6 Team
+
+- Invite by email. Roles: Owner, Admin, Member, Viewer.
+- Shared sandbox + shared pool (Team plan).
+- Each human is a *seat*. We do **not** share one consumer Claude login across the org.
+- Audit log: bot start/stop, persona publish, model change, connector add.
+
+---
+
+## 7. Sandbox VM (product contract)
+
+| | Free | Pro | Plus | Team |
 |---|---|---|---|---|
-| **1 — launch** | Bluesky | Official API via app-password/OAuth; Jetstream for mention events | **Auto-post** | Free API, 11k posts/day headroom, no bot rules, zero no-code competitors. The empty intersection. |
-| **1 — launch** | Telegram | Bot API webhook (BotFather-registered by us, one click for user) | **Auto-post** (opt-in by architecture) | First-class bots, 30 msg/sec free, structurally can't be unsolicited. |
-| **2** | Discord | Registered application, slash command + @mention | **Auto-post** | Sanctioned, opt-in; crowded but our BYO-model + retrieval loop is differentiated. |
-| **3 — gated** | X | **User's own X developer account** (BYO X-API keys, ElizaOS-style), summoned-only mode, "Automated" label enforced | **Approval queue** default; auto only after user confirms X approval | The only compliant shape. User pays X's per-use costs ($0.01/summoned post) directly — we pass through zero platform cost, same BYO philosophy. **Blocked until we resolve the AI-reply approval rule in the X dev console (RESEARCH.md §8).** |
-| Skip | Farcaster | — | — | Platform in collapse; revisit if ownership stabilizes. |
+| VMs | 1, aggressive sleep | 1 workspace | 1 warmer, or 2 | shared + extra on higher SKU |
+| Size | 1 vCPU / 1 GB | 2 vCPU / 2 GB | 4 vCPU / 4 GB | admin-chosen |
+| Sleep | 5 min idle | 15 min idle | optional always-warm | always-warm add-on |
+| Wake SLO | <30s | <20s | <10s warm | <10s |
+| Disk persist | 1 GB | 10 GB | 50 GB | pooled |
+| Concurrent **running** bots | 1 | 3 | 10 | 10 × seats (cap) |
+| Network | allowlist | allowlist + connectors | same | same |
 
-Approval queue everywhere as a user-selectable mode ("review before posting") — it's also our answer for cautious brands.
+**Sleep:** snapshot disk, pause machine. **Wake:** restore, attach gateway sidecar.  
+**Isolation:** one tenant per VM (Firecracker/E2B-class). No shared kernel with other customers.  
+**Egress:** default deny except: model gateway, connector webhooks we own, allowlisted fetch for browse_verify, package mirrors we pin.  
+**No GPU in v1.** Computer-use via headed browser in the VM if we add it later (Plus).
 
-## 7. Business model (Cursor's lessons, applied in reverse)
+Implementation choice (engineering, not user-facing): E2B or Fly Machines or Firecracker on our metal. Pick one in `ARCHITECTURE.md`. User only sees “cloud computer.”
 
-**Subscription for orchestration; inference is never ours to sell.**
+---
 
-- **Free:** 1 bot, 1 platform (Bluesky), BYO key, approval-queue mode, disclosure label. Top-of-funnel, near-zero marginal cost to us.
-- **Pro ~$15/mo:** 3 bots, all platforms, auto-post mode, persona studio, analytics, priority summon processing. Undercuts the $29–49 incumbent band *while removing their reply caps* — "unlimited replies, you pay your model provider at cost" is the wedge.
-- **Team ~$49/mo:** shared bots, roles, audit log, approval workflows.
-- **Self-host (open core):** runtime + connectors under Apache-2.0/MIT (no GPL/AGPL dependencies anywhere in the stack — commercial constraint; also why we build clean-room rather than forking Chatbox CE or Open WebUI, whose licenses bite); hosted control plane, persona studio, and team features are the paid layer. Branding stays (Open WebUI's clause shows the norm).
+## 8. Model gateway (product contract)
 
-**Pricing truths we commit to on day one (each one is a Cursor scar):**
-1. BYOK covers *everything* — there is no feature your key can't power. If that ever changes, the seam gets labeled on the pricing page the same day.
-2. "At cost" never implies "free" — the subscription is for orchestration and is stated next to the BYOK offer in the same sentence.
-3. One billing unit, live balance visible: bots + platforms. Never token-credits.
-4. If we ever add a bundled-inference convenience tier, it's OpenRouter-backed pass-through with visible margin, added alongside BYOK — never replacing it.
-5. **URLs in X replies are blocked by default** ($0.20/post URL tax — a 13× cost multiplier the user would eat); toggleable with a plain-English cost warning. On other platforms, links are fine.
+**We are the API customer.** Keys in a KMS vault. Runtime workers decrypt per request. Keys never written into the sandbox.
 
-**Cost model honesty:** on X, platform API cost dwarfs model cost (~$15/1k replies vs. ~$0.09–$2.80/1k) — which is exactly why user-pays-platform (BYO X keys) is the only structure that survives Hypefury's fate. On Bluesky/Telegram/Discord, platform cost is zero and the model bill goes straight to the user's provider. Our COGS ≈ hosting + retrieval infra, priced into the subscription.
+**v1 catalog (fetch live IDs at boot; never hardcode retired names):**
 
-## 8. MVP scope (phase 1)
+| Tier | Role | Examples (illustrative) | New-bot default? |
+|---|---|---|---|
+| **Low** | High volume, support, router | Haiku / Flash / GPT mini / cheap Grok | **Yes** |
+| **Mid** | Daily driver | Sonnet / GPT standard / Gemini Pro / Grok standard | Picker |
+| **Flagship** | Hard tasks | Opus / GPT flagship / Grok heavy | Overage or Plus |
 
-**In:** Bluesky + Telegram connectors · persona studio with AI-drafted personas + live preview · provider adapters: Anthropic (native, cached), OpenAI, xAI, DeepSeek, OpenRouter (OAuth), custom base URL · agent loop with thread_fetch / platform_search / web_search / browse_verify / view_image · moderation layer v1 (classifier + blocklists + disclosure marker) · key vault with TTL + revocation · dashboard with live-streamed retrieval steps · approval queue · machine-readable AI marking.
+Exact IDs from provider `/models` + OpenRouter. If a name dies (`grok-4`, `deepseek-chat`), drop it at runtime.
 
-**Out (deliberately):** X connector (gated on approval-rule verification) · Discord (phase 2) · voice/avatars (Companions were retired for a reason; text first) · any side-effectful tools (follow/DM/transact) · bundled inference credits · fine-tuning.
+**Routing:**
 
-**Success test:** a non-technical user goes from signup → live summonable Bluesky bot on their own Claude subscription in under 10 minutes, and every reply survives our own red-team injection suite.
+```
+chat/bot request
+  → workspace policy (allowed models, BYO?)
+  → if BYO key for that provider: use it (user bill)
+  → else: our key, debit token pool
+  → if pool empty: 402-style UX (upgrade / BYO)
+  → moderation on output
+  → bill meters
+```
 
-## 9. Risks
+**Prompt cache** where the provider supports it (Anthropic native). Static persona + tools = cache prefix. Don’t send Anthropic through a shim that drops cache.
+
+**OpenRouter** as the long-tail aggregator so we don’t sign every lab on day one. Direct Anthropic + OpenAI as soon as volume pays for native cache and better errors.
+
+---
+
+## 9. Connectors
+
+Bots speak **from the sandbox** (outbound) or via **control-plane webhooks** that enqueue work onto the VM.
+
+| Phase | Channel | Notes |
+|---|---|---|
+| **MVP** | In-app chat + groups | Always on |
+| **MVP** | Telegram | User’s BotFather token stored encrypted. Long-poll **from sandbox** or webhook → control plane → wake VM. Consent on `/start`. |
+| **2** | Discord | Registered app, slash + @mention. No self-bots. |
+| **2** | Bluesky | App password/OAuth on workspace. Self-label `bot`. Reply only if tagged. |
+| **3** | X | User’s X API keys. Summoned-only. Confirm AI-reply approval in X console first. User pays X per-use. URLs in replies off by default ($0.20/post). |
+| Skip | Farcaster | Unstable |
+
+Cron / webhook inbound = phase 2 (same wake path).
+
+---
+
+## 10. Pricing
+
+Two meters: **Sandbox** and **Models**. Gross margin target **>50%** on Pro after both. If not: raise price or shrink pool.
+
+| Plan | Price (test) | Sandbox | Models (our keys) |
+|---|---|---|---|
+| **Free** | $0 | Tiny, sleep-fast, hour cap | Tiny pool, **low** tier only |
+| **Pro** | **$24/mo** | 1 VM, sleep 15m, 3 running bots | Included pool; low+mid in picker; flagship = overage |
+| **Plus** | **$79/mo** | Warmer VM, 10 running bots | Larger pool; all tiers |
+| **Team** | **$24/seat/mo** + shared pool | Shared VM(s), roles, audit | Pooled; admin allowlist |
+
+**Overage:** prepaid packs or metered at visible rates (pass-through list + margin, shown before click).  
+**BYO:** $0 extra on tokens; VM hours still count.  
+**Unlimited bots** in marketing = unlimited configs. Running-bot cap on the same page as the price.
+
+Homepage sentence:
+
+> $24/mo. Cloud computer + models you choose. Claude, GPT, Gemini, Grok. Caps shown. Not unlimited Opus.
+
+---
+
+## 11. Compliance and safety
+
+- **EU AI Act Art. 50** (in force 2 Aug 2026): disclose AI on first interaction; machine-readable mark on generated text (grace to 2 Dec 2026 for systems already on market). Implement as: visible “AI” badge + metadata header on API/exports.
+- Telegram `/start` consent: messages go to **our** model providers (named).
+- Discord: official bot only.
+- Bluesky: `bot` self-label; tagged-only.
+- Never sell fake engagement.
+- **Moderation** is a named pipeline stage (classifier + blocklist + disclosure check), not a prompt paragraph. Kill switch per bot and global.
+- Prompt injection: tool results are data; no side-effect tools in v1 (no follow, mass-DM, arbitrary shell as root, payments).
+- Persona publishes go through a diff UI.
+
+---
+
+## 12. Non-goals (v1)
+
+- Logging into the user’s Claude / ChatGPT / Gemini **consumer** account.
+- Spoofing Claude Code / Codex OAuth.
+- Shipping Tab/Composer clones (proprietary Cursor models).
+- Unsolicited X reply farming.
+- Fine-tuning.
+- GPU training boxes.
+- “Unlimited 24/7 flagship” on Pro.
+
+---
+
+## 13. Information architecture (app)
+
+```
+[Home]
+  Chat          — threads, model picker
+  Bots          — list, new, running/stopped, logs
+  Groups        — rooms
+  Computer      — sandbox status, disk, terminal (Plus)
+  Usage         — two meters, BYO keys
+  Settings      — workspace, team, billing, connectors
+```
+
+Mobile: Chat + bot approvals + meters. Bot *create* can wait for desktop/web.
+
+---
+
+## 14. Success metrics
+
+| Stage | Metric | Target |
+|---|---|---|
+| Activation | Signup → first model reply | <10 min, >60% |
+| Grok Bot parity | Laptop closed, Telegram bot still replies | True on Pro |
+| Wedge | % of workspaces that use **≥2 providers** in 7 days | >40% |
+| Economics | Gross margin Pro | >50% |
+| Safety | Moderation stage on 100% of bot outbound | 100% |
+| Cap UX | Hits 100% pool without a billed path (upgrade/BYO) | 0% |
+
+Kill criterion: cannot hold >50% GM at $24 with sleep-on-idle VMs and cheap defaults.
+
+---
+
+## 15. MVP (build this, nothing else)
+
+**In:**
+
+1. Auth + workspace.  
+2. One sandbox per workspace (smallest machine, sleep idle, persist `/workspace`).  
+3. Model gateway: **two providers minimum** (e.g. OpenRouter low + mid). Picker on chat.  
+4. Chat streaming.  
+5. Create bot → in-app + Telegram.  
+6. One group.  
+7. Two meters + hard stop.  
+8. Output moderation + disclosure.  
+
+**Out:** CLI login, X, Discord, Bluesky, terminal UI, flagship-included-unlimited, Teams SSO.
+
+**Demo script:** empty account → chat on model A → switch to model B → bot on Telegram → close laptop → phone still gets a reply.
+
+---
+
+## 16. Roadmap
+
+| Phase | When | Ships |
+|---|---|---|
+| **0** | now | This spec |
+| **1 MVP** | first slice | §15 |
+| **2** | | Discord, Bluesky, Groups routing, BYO keys, Plus SKU |
+| **3** | | Team seats, audit, always-warm, browser-in-sandbox |
+| **4** | gated | X summoned-only + BYO X credits |
+| **5** | optional | User-owned runtime (T3-style CLI) as a *second* product mode — not the Grok Bot fight |
+
+---
+
+## 17. Risks
 
 | Risk | Severity | Mitigation |
 |---|---|---|
-| Bluesky adopts X-like bot rules (policy vacuum closes) | High | Multi-platform from day 1; disclosure-by-default already exceeds any likely rule; approval-queue mode ready |
-| X approval rule blocks the X connector entirely | Med | X is phase 3 and gated; product stands on Bluesky/Telegram/Discord without it |
-| Prompt injection incident on a customer bot | High | §4.3 (no side-effectful tools, output moderation, structured retrieval); red-team suite in CI; incident kill switch |
-| Provider revokes undocumented CORS / changes key policy | Low (server-side custody is the primary path) | Browser-direct is only used for key-validation UX; runtime is server-side regardless |
-| Incumbent (Typefully/Buffer) adds BYOK | Med | They'd cannibalize their credit margin (innovator's dilemma); our retrieval loop + persona depth is the second moat |
-| A model provider ships a native bot product | Med | They'll be single-model by construction — model-agnosticism is precisely what they can't copy |
-| AI-content backlash on Bluesky (reputational) | Med | Summoned-only default, hard disclosure, quality bar via browse-verify — position as "answers when asked," never ambient spam |
-| BYOK onboarding friction — non-developers don't have API keys (the reason this category stayed empty) | High | OpenRouter OAuth PKCE as the default "Connect" path: mints the user's own key in two clicks, no developer signup; raw key-pasting is the power-user path, not the main flow |
-| Provider subscription-auth enforcement (Anthropic-style fingerprinting/legal action) | Low for us | We never touch consumer-subscription auth — API keys only; keep all copy free of "use your subscription" claims |
+| Token burn on agentic bots | Critical | Cheap default, running-bot cap, 80% banner, BYO valve, GM kill switch |
+| VM cost if we don’t sleep | Critical | Idle sleep mandatory on Free/Pro; meter hours |
+| Cursor adds a picker to Grok Bot | High | BYO + non-Grok default + groups; ship picker day one |
+| OpenAI/Anthropic supply or ToS | High | Multi-provider gateway; OpenRouter long tail; our keys not user OAuth |
+| Prompt injection / bot incident | High | No side-effect tools; moderation stage; kill switch |
+| Trademark GrokRep | High | Rename before marketing |
+| X API economics | High | X is phase 4, user pays X, URLs off |
+| Wake latency > Grok Bot | Med | Keep-alive on Plus; show “waking…” honestly |
 
-## 10. Why we win (one paragraph)
+---
 
-Every competitor either bundles a hidden model behind credit caps (SaaS reply tools), requires an engineering team (ElizaOS), or can't touch social platforms at all (no-code chatbot builders). We ship the @grok architecture — verified against xAI's own published prompt — as a consumer product, on the platforms where it's actually legal, powered by the AI subscription the user already has, with key custody we publish and competitors demonstrably fake. Cursor proved BYOK builds a beachhead when your moat is orchestration; unlike Cursor, our moat never stops being orchestration.
+## 18. Copy
+
+**Ship**
+
+> Cloud computer + the model you choose.  
+> Chat, bots, and groups. Claude, GPT, Gemini, Grok.  
+> $24/mo includes a sandbox and a model pool. Caps are on the usage page.  
+> Optional: use your own API key on the same computer.
+
+**Never**
+
+> Use your ChatGPT Plus / Claude Pro login.  
+> Unlimited Opus.  
+> Your own @grok.  
+> We reuse your grok.com session.
+
+---
+
+## 19. Open decisions (do not block MVP)
+
+- Final public name.  
+- E2B vs Fly Machines vs self-hosted Firecracker (`ARCHITECTURE.md` picks a default).  
+- OpenRouter-only in MVP vs Anthropic+OpenAI direct.  
+- Exact token pool sizes (set after a 50-user cost probe, not from a guess in this doc).

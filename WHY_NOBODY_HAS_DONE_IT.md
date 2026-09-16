@@ -1,6 +1,8 @@
 # Why Nobody Has Done It
 
-> Answer to: "if BYO-key social AI bots are such an obvious gap, why does no product exist?" Empirical pass run 2026-09-15 (GitHub Search API, HN Algolia, primary docs — WebSearch budget was exhausted, which forced primary sources; arguably stronger evidence). Companion to RESEARCH.md §7.
+> **Product note (2026-09-15):** GrokRep **v2** is a Grok Bot competitor — we sell a **sandbox VM + models** (our keys, our machines). See `PRODUCT_DESIGN.md`. This file is the earlier investigation into BYO-key *social* bots and why that category stayed empty. It still explains why we do **not** log into a user’s Claude Pro / ChatGPT Plus, and why X is a late, gated channel.
+
+> Answer to: "if BYO-key social AI bots are such an obvious gap, why does no product exist?" Empirical pass run 2026-09-15. Companion to RESEARCH.md §7.
 
 ## 0. The headline: the category was never born, not killed
 
@@ -17,7 +19,7 @@ The people who *have* API keys are developers — and developers don't need a pr
 
 Cursor's early BYOK worked because its audience — developers — already had OpenAI keys. The social-bot audience mostly doesn't. That asymmetry, more than anything, explains the empty quadrant.
 
-**Our answer:** OpenRouter OAuth PKCE — the one provider-sanctioned flow that mints a user's own key in two clicks, no developer signup, no key pasting. It converts "BYOK is developer-only friction" into a consumer-grade connect button. Also: drop every "use your subscription" phrasing from product copy — it's a cease-and-desist, not a feature.
+**Our answer (updated after T3/Hermes teardown):** do not pretend OpenRouter is ChatGPT Plus. The sentence “use the plan you already pay for” is real in two shapes only: (A) T3-style — spawn the **unmodified official CLI** the user already logged into (`claude auth login`, `codex login`, `grok login`); tokens never enter our vault. (B) Hermes-style — **lab-listed partner OAuth** (xAI actually published Hermes). Hosted “Sign in with Claude” is still a cease-and-desist. OpenRouter/Poe stay as a labeled extra bill, not the headline. Product copy may say the sentence **if** onboarding is “on this computer / this VPS.”
 
 ## 2. BYOK never solved the cost that actually binds (on X)
 
@@ -47,9 +49,9 @@ Every enabling condition is 2025–2026: tool-calling maturity across all provid
 
 ## The honest synthesis
 
-The gap is real but it is not free money — it's guarded by two walls the incumbents never solved: **key onboarding for non-developers** (wall 1) and **X's platform cost** (wall 2). Our design already answers both: OpenRouter one-click for wall 1, Bluesky/Telegram-first + BYO-X-credits for wall 2. The extinction record (wall 3) is why compliance-by-design isn't overhead — it's the survival trait every dead bot lacked.
+The gap is real but it is not free money — it's guarded by two walls the incumbents never solved: **key onboarding for non-developers** (wall 1) and **X's platform cost** (wall 2). T3 and Hermes showed wall 1 has a legal door: run the official client on hardware the user controls (and, for Grok, get listed by xAI). That door does **not** open a multi-tenant cloud that intermediates Pro/Plus tokens. Our design now takes that door: local/VPS runtime + official CLIs as the headline, OpenRouter/API as the escape hatch, Bluesky/Telegram-first + BYO-X-credits for wall 2. The extinction record (wall 3) is why compliance-by-design isn't overhead — it's the survival trait every dead bot lacked.
 
-One correction this forced in PRODUCT_DESIGN.md: the pitch is **"your own AI account (API key)"**, never "your subscription" — the latter is prohibited by Anthropic's terms and actively enforced.
+PRODUCT_DESIGN.md pitch is now **"use the plan you already pay for, on this machine"** — T3/Hermes shape — not "log into Claude on our website."
 
 ## Open gaps (search-budget casualties)
 - Product Hunt / Indie Hackers launch archaeology (no open API; needs search budget).
