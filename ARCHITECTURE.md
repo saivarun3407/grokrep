@@ -112,7 +112,8 @@ first chat or inbound connector
   → daemon heartbeats control plane
 
 idle > plan.sleep_after
-  → SNAPSHOT /workspace
+  → wait until no open turn holds the wake lock
+  → SNAPSHOT /workspace only after last turn is **committed** (or failed) and sandbox is **idle under lock**
   → PAUSE VM
   → state = sleeping
 
@@ -153,34 +154,59 @@ request (workspace token, model, messages, tools)
 
 **402 path:** pool exhausted → UI: upgrade / overage / BYO. Gateway returns a typed error, not a model hallucination.
 
+**Typed errors** (gateway → client; never hallucinate these as model text):
+
+| Code | When |
+|---|---|
+| `pool_exhausted` | Platform token pool at 100% |
+| `sandbox_capped` | Sandbox hours exhausted |
+| `model_unavailable` | Catalog / provider down |
+| `auth_failed` | Workspace or BYO key bad |
+| `rate_limited` | Per-workspace or provider limit |
+| `moderation_blocked` | Outbound failed moderation (channel path) |
+| `turn_conflict` | Idempotency / wake-lock conflict |
+
+
 ---
 
 ## 6. Turn execution (chat or bot)
 
+Canonical state machine, idempotency, and crash/retry: **`SPECS/turn-protocol.md`**.
+
 ```
-1. Load persona + thread (control plane)
-2. Wake sandbox
-3. Optional tools: daemon runs them, appends tool results as data
-4. Gateway completion (stream to UI and/or channel)
-5. Moderation on final text
-6. If FAIL: do not post; log; optional user-facing “blocked”
-7. If channel: post; if approval queue: wait
-8. Persist messages + usage
+queued → waking → running_tools → inferring → moderating → posting → committed
+                                                              ↘ failed
 ```
 
-Social channels: char budget + no markdown. In-app chat: markdown OK.
+Sketch:
+
+```
+1. Insert turn (`queued`) with idempotency key before wake
+2. Acquire wake lock (Redis); wake sandbox if sleeping
+3. Optional tools: daemon runs them into /workspace/tmp/<turn_id>/; results are data
+4. Gateway completion (stream in-app only; buffer for external)
+5. Moderation on final text
+6. If FAIL: do not post externally; log; optional user-facing “blocked”
+7. If channel: post; if approval queue: wait → committed
+8. Persist messages + usage; promote tmp → bots/<id>/ only on committed
+```
+
+**Redis uses (explicit):** job **queue**, per-sandbox **wake lock**, **rate limit** counters. Not a substitute for Postgres truth.
+
+Social channels: char budget + no markdown; **never stream outbound** before moderation. In-app chat: markdown OK; may stream tokens, still moderate final.
 
 ---
 
 ## 7. Connectors
 
-**Telegram MVP:**
+**Telegram MVP (webhook-only):**
 
 - User pastes bot token → encrypted in `bot_channels`.
-- **Webhook** to control plane (preferred) *or* long-poll from sandbox if webhook URL is painful on sleep.
-- Wake on message → turn → reply. Sleep timer resets.
+- **Webhook to control plane only** — not long-poll inside the sandbox (VMs sleep).
+- Control plane accepts webhooks **24/7**, **enqueues** a turn, then **wakes** the VM.
+- Wake → turn protocol → moderate → reply. Sleep timer resets after committed/failed.
 
-Webhook + sleeping VM: control plane accepts webhook 24/7 (cheap), enqueues, wakes VM. Don’t keep 10k VMs warm for Telegram.
+Do not keep VMs warm just for Telegram. See `SPECS/turn-protocol.md` anti-patterns.
 
 ---
 
@@ -225,12 +251,16 @@ Do not start this tree until MVP in `PRODUCT_DESIGN.md` §15 is the sprint. This
 
 ## 11. MVP build order
 
-1. Workspace + auth + Stripe stub (hard-coded Pro entitlements in dev).
-2. Gateway + OpenRouter + one stream in the web chat.
-3. Sandbox provision/sleep/wake + `/workspace` persist.
-4. Wire chat tools (files only).
-5. Bots table + Telegram webhook → turn.
-6. Meters + cap UX.
-7. Moderation on bot outbound.
+Aligned with `SPECS/exceptional-bar.md` (do not reorder):
+
+1. ADR sandbox driver + empty wake/sleep demo (`DECISIONS/001-sandbox-vendor.md`).
+2. Gateway OpenRouter stream + typed errors + `usage_events`.
+3. Auth + workspace + two meters UI.
+4. Chat through gateway (no sandbox tools yet).
+5. Daemon + path-jailed files tools + turn state machine + idempotency.
+6. Telegram webhook → turn → moderate → reply.
+7. Hard caps 80%/100%.
+8. Groups + @mention only (no router).
+9. Red-team + wake latency dashboard.
 
 Each step is demoable alone.

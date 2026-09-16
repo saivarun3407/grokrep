@@ -1,8 +1,8 @@
 # Why Nobody Has Done It
 
-> **Product note (2026-09-15):** GrokRep **v2** is a Grok Bot competitor — we sell a **sandbox VM + models** (our keys, our machines). See `PRODUCT_DESIGN.md`. This file is the earlier investigation into BYO-key *social* bots and why that category stayed empty. It still explains why we do **not** log into a user’s Claude Pro / ChatGPT Plus, and why X is a late, gated channel.
-
-> Answer to: "if BYO-key social AI bots are such an obvious gap, why does no product exist?" Empirical pass run 2026-09-15. Companion to RESEARCH.md §7.
+> **HISTORICAL / REJECTED PATH — not build truth.**  
+> Explains why BYO-key *social* bots stayed empty and why we **reject** logging into a user’s Claude Pro / ChatGPT. **Do not implement those.**  
+> Ship **`PRODUCT_DESIGN.md` (v2)** only. See `SPECS/exceptional-bar.md`.
 
 ## 0. The headline: the category was never born, not killed
 

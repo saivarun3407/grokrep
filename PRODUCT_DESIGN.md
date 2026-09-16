@@ -20,6 +20,16 @@ This is a **reseller + sandbox** company (Cursor-legal: our API keys, our machin
 
 ---
 
+
+### Build law (engineering)
+
+Authoritative build constraints (do not reinvent in code comments):
+
+- [`SPECS/turn-protocol.md`](./SPECS/turn-protocol.md) — turn + bot state machines, idempotency, moderation-before-post
+- [`SPECS/tool-policy.md`](./SPECS/tool-policy.md) — path jail, phased tools, egress
+- [`SPECS/exceptional-bar.md`](./SPECS/exceptional-bar.md) — pass/fail + MVP build order
+- [`DECISIONS/`](./DECISIONS/) — ADRs (e.g. sandbox vendor)
+
 ## 1. Problem
 
 Grok Bot already sold the package people want: **a cloud employee that stays on when the laptop closes.** Two gaps:
@@ -122,11 +132,18 @@ At **80%** of the token pool: banner. Choices: upgrade, buy extra usage, **paste
 | Disclosure | On, non-removable. |
 | Blocklist | Topics, users, URL policy. |
 
-**Runtime:**
+**Runtime state machine** (see `SPECS/turn-protocol.md`):
 
-- **Running** = process (or lightweight worker) in the sandbox listening on channels.
-- **Stopped** = config only.
-- **Paused** = kill switch (workspace admin or us).
+```
+config → starting → running → draining → stopped
+                ↘ error
+running → paused
+paused → starting
+error → starting | stopped
+```
+
+- Only **`running`** bots count toward the plan’s running-bot cap.
+- **`paused`** = kill switch (workspace admin or us).
 - Logs: every summon, model used, tokens, sandbox CPU, output after moderation.
 
 **Agent loop** (portable @grok contract, clean-room — do not copy xAI prompt text):
@@ -139,7 +156,7 @@ Rules we keep: retrieved text is **data**, not instructions; match language of t
 
 - A group is a thread with **members** (users + bots).
 - Each bot keeps its own model.
-- Optional router bot (cheap model) that assigns the mention to a specialist.
+- **MVP:** @mention only (no automatic router). A cheap router bot that assigns mentions to specialists is **deferred** past MVP.
 - Company view: list of groups, which bots are running, pool burn per bot.
 
 ### 6.4 Sandbox (user-visible)
@@ -184,6 +201,18 @@ Never: “Sign in with Claude.ai / ChatGPT / Gemini” in our hosted app.
 **Egress:** default deny except: model gateway, connector webhooks we own, allowlisted fetch for browse_verify, package mirrors we pin.  
 **No GPU in v1.** Computer-use via headed browser in the VM if we add it later (Plus).
 
+
+**Filesystem layout** (product contract; tools jail against this — `SPECS/tool-policy.md`):
+
+```
+/workspace/
+  shared/                 # explicit opt-in cross-bot
+  bots/<bot_id>/          # default tool root
+  tmp/<turn_id>/          # wiped after commit or failed GC
+```
+
+Promote `tmp/<turn_id>/` into `bots/<bot_id>/` only when the turn is **committed** (`SPECS/turn-protocol.md`).
+
 Implementation choice (engineering, not user-facing): E2B or Fly Machines or Firecracker on our metal. Pick one in `ARCHITECTURE.md`. User only sees “cloud computer.”
 
 ---
@@ -227,7 +256,7 @@ Bots speak **from the sandbox** (outbound) or via **control-plane webhooks** tha
 | Phase | Channel | Notes |
 |---|---|---|
 | **MVP** | In-app chat + groups | Always on |
-| **MVP** | Telegram | User’s BotFather token stored encrypted. Long-poll **from sandbox** or webhook → control plane → wake VM. Consent on `/start`. |
+| **MVP** | Telegram | User’s BotFather token stored encrypted. **Webhook to control plane only** (24/7 accept → enqueue → wake VM). Long-poll inside the sandbox is **not** an MVP option (VMs sleep). Consent on `/start`. |
 | **2** | Discord | Registered app, slash + @mention. No self-bots. |
 | **2** | Bluesky | App password/OAuth on workspace. Self-label `bot`. Reply only if tagged. |
 | **3** | X | User’s X API keys. Summoned-only. Confirm AI-reply approval in X console first. User pays X per-use. URLs in replies off by default ($0.20/post). |
@@ -323,11 +352,12 @@ Kill criterion: cannot hold >50% GM at $24 with sleep-on-idle VMs and cheap defa
 3. Model gateway: **two providers minimum** (e.g. OpenRouter low + mid). Picker on chat.  
 4. Chat streaming.  
 5. Create bot → in-app + Telegram.  
-6. One group.  
+6. One group (**@mention only**).  
 7. Two meters + hard stop.  
 8. Output moderation + disclosure.  
+9. **Turn idempotency** (`turn_id` + `(channel, idempotency_key)`) and **moderation-before-external-post** (`SPECS/turn-protocol.md`).  
 
-**Out:** CLI login, X, Discord, Bluesky, terminal UI, flagship-included-unlimited, Teams SSO.
+**Out:** CLI login, X, Discord, Bluesky, terminal UI, flagship-included-unlimited, Teams SSO, Telegram long-poll-in-VM, group router.
 
 **Demo script:** empty account → chat on model A → switch to model B → bot on Telegram → close laptop → phone still gets a reply.
 
